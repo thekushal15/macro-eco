@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sovereign Long-Bond Yield and Coupon Model</title>
+<style>
+  :root { --ink:#1d2330; --muted:#6b7280; --line:#e5e7eb; --accent:#1f4e79; --bg:#f5f6f8; --good:#2e7d32; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color:var(--ink); background:var(--bg); font-size:14px; }
+  header { background:var(--accent); color:#fff; padding:20px 28px; }
+  header h1 { margin:0 0 6px; font-size:22px; }
+  header p { margin:0; opacity:.92; max-width:900px; line-height:1.45; }
+  main { display:grid; grid-template-columns: minmax(420px,1.3fr) minmax(340px,1fr); gap:18px; padding:18px 24px 40px; align-items:start; }
+  @media (max-width: 1000px) { main { grid-template-columns:1fr; } }
+  .panel { background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:18px; }
+  .panel h2 { font-size:16px; margin:0 0 4px; color:var(--accent); }
+  .sub { font-size:12px; color:var(--muted); margin:0 0 12px; line-height:1.45; }
+  .ctl { padding:8px 0; border-bottom:1px dashed var(--line); }
+  .ctl-label { display:flex; justify-content:space-between; font-size:13px; margin-bottom:4px; }
+  .ctl-val { font-weight:600; color:var(--accent); }
+  input[type=range] { width:100%; accent-color: var(--accent); }
+  .card { border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px; }
+  .card-head { display:flex; justify-content:space-between; gap:12px; align-items:baseline; flex-wrap:wrap; }
+  .card-title { font-weight:600; font-size:14px; }
+  .card-result { font-weight:600; color:var(--accent); font-size:13px; }
+  .card-note { font-size:12px; color:var(--muted); margin:4px 0 8px; }
+  .frow { display:grid; grid-template-columns: 2.2fr 1.3fr 1.3fr 0.8fr 0.7fr; gap:10px; align-items:center; padding:7px 0; border-top:1px dashed var(--line); font-size:12.5px; }
+  .frow-hdr { font-weight:600; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.03em; border-top:none; }
+  .frow .val { font-variant-numeric: tabular-nums; text-align:right; }
+  .frow input[type=range] { margin:0; }
+  .frow > div:nth-child(2) span, .frow > div:nth-child(3) span { display:inline-block; min-width:28px; text-align:right; font-variant-numeric:tabular-nums; font-size:12px; color:var(--muted); }
+  .headline { display:grid; grid-template-columns: repeat(3,1fr); gap:10px; text-align:center; }
+  .big { font-size:26px; font-weight:700; color:var(--accent); font-variant-numeric:tabular-nums; }
+  .lbl { font-size:11px; text-transform:uppercase; color:var(--muted); letter-spacing:.04em; margin-top:2px; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th, td { padding:6px 6px; border-bottom:1px solid var(--line); text-align:left; vertical-align:middle; }
+  th { font-size:11px; text-transform:uppercase; color:var(--muted); letter-spacing:.03em; }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  tr.total td { font-weight:700; border-top:2px solid var(--ink); }
+  .bar { height:8px; background:#eef1f5; border-radius:4px; overflow:hidden; min-width:80px; }
+  .bar span { display:block; height:100%; background:var(--accent); }
+  .note { font-size:12px; color:var(--muted); line-height:1.5; }
+  .note li { margin-bottom:4px; }
+  .tag { display:inline-block; font-size:11px; padding:2px 6px; border-radius:4px; background:#eef4fa; color:var(--accent); margin-right:4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sovereign Long-Bond Yield and Coupon Model</h1>
+  <p>Stage 1 builds the fair yield and reoffer coupon for an n-year local-currency sovereign bond from its macro and risk factors. Stage 2 builds the spread of a corporate or quasi-sovereign issuer over that sovereign yield. Move any slider and the outputs update. Weights are normalised automatically, so only relative weights matter. Risk scores run from 0 (best) to 100 (worst).</p>
+</header>
+
+<main>
+  <section>
+    <div class="panel">
+      <h2>Global inputs</h2>
+      <p class="sub">Policy path and tenor. The expected policy path converges from the current rate to the long-run neutral rate with the chosen half-life.</p>
+      <div id="global"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Stage 1: sovereign yield factors</h2>
+      <p class="sub">Four blocks, each a weighted scorecard. The points column shows each factor's contribution to its block's risk score.</p>
+      <div id="cards-s1"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Stage 2: issuer spread over the sovereign</h2>
+      <p class="sub">The sovereign-linkage factor is linked to the sovereign credit score from Stage 1, so it moves automatically.</p>
+      <div class="ctl">
+        <div class="ctl-label"><span>Issuer new-issue concession</span><span class="ctl-val" id="inic-val">25 bp</span></div>
+        <input type="range" id="inic" min="0" max="60" step="1" value="25">
+      </div>
+      <div id="cards-s2"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="panel">
+      <h2>Output: sovereign coupon and yield</h2>
+      <div class="headline" style="margin-top:10px;">
+        <div><div class="big" id="h-coupon">-</div><div class="lbl">Coupon (rounded to 1/8)</div></div>
+        <div><div class="big" id="h-reoffer">-</div><div class="lbl">Reoffer yield</div></div>
+        <div><div class="big" id="h-fair">-</div><div class="lbl">Fair yield (before concession)</div></div>
+      </div>
+      <p class="note" id="h-desc" style="margin-top:12px;"></p>
+    </div>
+
+    <div class="panel">
+      <h2>Yield build-up and weights</h2>
+      <p class="sub">Each component's share of the reoffer yield. Shares add to 100%.</p>
+      <table>
+        <thead><tr><th>Component</th><th class="num">bp</th><th class="num">Share</th><th>Weight</th></tr></thead>
+        <tbody id="breakdown"></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>Coupon along the curve</h2>
+      <p class="sub">Same factor inputs, evaluated at standard tenors. Shows how the term premium and policy path shape the curve.</p>
+      <table>
+        <thead><tr><th>Tenor</th><th class="num">Fair yield</th><th class="num">Reoffer</th><th class="num">Coupon</th></tr></thead>
+        <tbody id="curve"></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>Output: issuer spread (Stage 2)</h2>
+      <table>
+        <tbody>
+          <tr><td>Spread over the sovereign</td><td class="num" id="s2-spread">-</td></tr>
+          <tr><td>Sovereign fair yield at tenor</td><td class="num" id="s2-sov">-</td></tr>
+          <tr><td>Issuer reoffer yield</td><td class="num" id="s2-yield">-</td></tr>
+          <tr><td>Issuer coupon (rounded to 1/8)</td><td class="num" id="s2-coupon">-</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>Method and sources</h2>
+      <ul class="note">
+        <li><strong>Yield identity.</strong> A long yield equals the expected average of future short rates over the bond's life plus a term premium. This is the decomposition used by the New York Fed's ACM model. <span class="tag">Liberty Street Economics</span></li>
+        <li><strong>Sovereign credit spread.</strong> Default spread is set from the rating or CDS, then used as the base for risk premia. <span class="tag">Damodaran, NYU Stern</span></li>
+        <li><strong>Credit factors.</strong> Debt, debt service, reserves, growth, inflation, external balance, and institutions follow the variables that empirical panel studies of emerging-market spreads find significant. <span class="tag">Rowland and Torres, Banco de la República</span></li>
+        <li><strong>New-issue concession.</strong> New sovereign lines are typically priced against an interpolated reference plus a modest concession. <span class="tag">Syndication pricing practice</span></li>
+        <li><strong>Weights and mappings are calibrated judgements,</strong> informed by the sources above. They are not regression coefficients. Replace them with your own estimates before using the outputs for pricing.</li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<script>
+  const TAU_TP = 6;           // years; shape of the tenor build-up of the term premium
+  const $ = id => document.getElementById(id);
+  const f2 = (x, d = 2) => Number(x).toFixed(d);
+
+  // ---------- Global inputs ----------
+  const GLOBAL = [
+    { key:'tenor', label:'Tenor (years)',                       min:1,   max:30, step:1,    val:10, fmt:v => v + ' yrs' },
+    { key:'cur',   label:'Current policy rate (%)',             min:0,   max:30, step:0.25, val:15, fmt:v => f2(v) + '%' },
+    { key:'lr',    label:'Long-run nominal neutral rate (%)',   min:0,   max:12, step:0.25, val:6,  fmt:v => f2(v) + '%' },
+    { key:'hl',    label:'Policy convergence half-life (years)',min:0.5, max:8,  step:0.25, val:2,  fmt:v => f2(v) + ' yrs' },
+    { key:'nic',   label:'Sovereign new-issue concession (bp)', min:0,   max:100,step:1,    val:20, fmt:v => v + ' bp' }
+  ];
+  const G = {};
+  GLOBAL.forEach(g => G[g.key] = g.val);
+
+  // ---------- Scorecards ----------
+  // Each factor: w = weight (0–50 input), s = risk score (0–100 input, 0 = best).
+  // map(S) converts the block risk score S (0–100) into basis points.
+  const SC = {
+    cr: {
+      title: 'A. Sovereign credit (default) spread',
+      note: 'Spread maps exponentially from 40 bp (score 0) to 1,200 bp (score 100). The convexity matches how spreads widen faster at weaker ratings.',
+      map: S => 40 * Math.pow(30, S / 100),
+      factors: [
+        { name:'Public debt level (debt / GDP)',                    w:20, s:50 },
+        { name:'Debt service and gross financing needs',            w:15, s:60 },
+        { name:'Reserve adequacy (reserves / GDP, import cover)',   w:15, s:60 },
+        { name:'Growth outlook and potential growth',               w:10, s:45 },
+        { name:'Inflation level and stability',                     w:10, s:55 },
+        { name:'External balance and debt-to-exports',              w:10, s:50 },
+        { name:'Institutions and governance',                       w:10, s:55 },
+        { name:'External-debt share and currency mismatch',         w:10, s:50 }
+      ]
+    },
+    tp: {
+      title: 'B. Term premium (compensation for holding duration)',
+      note: 'Maps linearly to a 10-year term premium of 0–250 bp, then shaped by tenor.',
+      map: S => 250 * S / 100,
+      factors: [
+        { name:'Inflation uncertainty and central bank credibility', w:35, s:55 },
+        { name:'Duration supply and fiscal financing need',          w:25, s:55 },
+        { name:'Policy and rate volatility',                         w:25, s:50 },
+        { name:'Investor-base fragility (foreign share, sudden stop)',w:15, s:50 }
+      ]
+    },
+    fx: {
+      title: 'C. Currency and convertibility premium',
+      note: 'Maps linearly to 0–300 bp. Applies to local-currency bonds only.',
+      map: S => 300 * S / 100,
+      factors: [
+        { name:'Exchange-rate regime (managed peg vs free float)',  w:35, s:45 },
+        { name:'Realised FX volatility and pass-through',           w:30, s:40 },
+        { name:'Convertibility and capital-control risk',           w:35, s:35 }
+      ]
+    },
+    liq: {
+      title: 'D. Liquidity and market-structure premium',
+      note: 'Maps linearly to 0–100 bp.',
+      map: S => 100 * S / 100,
+      factors: [
+        { name:'Market depth and turnover',                         w:40, s:45 },
+        { name:'Issue size and benchmark status',                   w:30, s:50 },
+        { name:'Index eligibility and investor breadth',            w:30, s:40 }
+      ]
+    }
+  };
+
+  const SC2 = {
+    iss: {
+      title: 'Issuer spread over the sovereign',
+      note: 'Spread maps exponentially from 30 bp (score 0) to 900 bp (score 100).',
+      map: S => 30 * Math.pow(30, S / 100),
+      factors: [
+        { name:'Issuer financial strength (leverage, interest cover, cash flow)', w:30, s:50 },
+        { name:'Sovereign linkage (ceiling and parent support), auto from Stage 1 credit score', w:15, s:0, auto:true },
+        { name:'Structural terms (seniority, covenants, call and put features)',  w:15, s:40 },
+        { name:'Sector macro sensitivity (cyclicality, FX mismatch)',           w:20, s:50 },
+        { name:'Market technicals (sector supply, issuer bond liquidity)',      w:20, s:45 }
+      ]
+    }
+  };
+
+  // ---------- Score helpers ----------
+  function scoreOf(sc) {
+    const tot = sc.factors.reduce((a, f) => a + f.w, 0) || 1;
+    let S = 0;
+    sc.factors.forEach(f => { f.eff = f.w / tot; S += f.eff * f.s; });
+    sc.S = S;
+    return S;
+  }
+
+  // ---------- DOM builders ----------
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+  function makeSlider(min, max, step, val, onInput) {
+    const i = document.createElement('input');
+    i.type = 'range'; i.min = min; i.max = max; i.step = step; i.value = val;
+    i.addEventListener('input', () => onInput(parseFloat(i.value)));
+    return i;
+  }
+
+  function buildGlobal() {
+    const wrap = $('global');
+    GLOBAL.forEach(def => {
+      const row = el('div', 'ctl');
+      const lab = el('div', 'ctl-label');
+      const txt = el('span', '', def.label);
+      const out = el('span', 'ctl-val', def.fmt(def.val));
+      lab.append(txt, out);
+      const sl = makeSlider(def.min, def.max, def.step, def.val, v => {
+        G[def.key] = v; out.textContent = def.fmt(v); update();
+      });
+      row.append(lab, sl);
+      wrap.append(row);
+    });
+  }
+
+  function buildCard(sc, container) {
+    const card = el('div', 'card');
+    const head = el('div', 'card-head');
+    const res = el('div', 'card-result', '');
+    head.append(el('div', 'card-title', sc.title), res);
+    card.append(head);
+    if (sc.note) card.append(el('div', 'card-note', sc.note));
+    const hdr = el('div', 'frow frow-hdr');
+    hdr.append(el('div', '', 'Factor'), el('div', '', 'Weight'), el('div', '', 'Risk score (0 best, 100 worst)'), el('div', 'val', 'Eff. weight'), el('div', 'val', 'Points'));
+    card.append(hdr);
+    sc.resultEl = res;
+    sc.factors.forEach(f => {
+      const r = el('div', 'frow');
+      const nm = el('div', '', f.name);
+
+      const wBox = el('div');
+      const wOut = el('span', '', String(f.w));
+      const wSl = makeSlider(0, 50, 1, f.w, v => { f.w = v; wOut.textContent = v; update(); });
+      wBox.append(wSl, wOut);
+
+      const sBox = el('div');
+      const sOut = el('span', '', String(f.s));
+      let sSl;
+      if (f.auto) {
+        sSl = makeSlider(0, 100, 1, f.s, () => {});
+        sSl.disabled = true;
+      } else {
+        sSl = makeSlider(0, 100, 1, f.s, v => { f.s = v; sOut.textContent = v; update(); });
+      }
+      sBox.append(sSl, sOut);
+
+      const effEl = el('div', 'val', '');
+      const ptsEl = el('div', 'val', '');
+      f.refs = { eff: effEl, pts: ptsEl, sSl, sOut };
+      r.append(nm, wBox, sBox, effEl, ptsEl);
+      card.append(r);
+    });
+    container.append(card);
+  }
+
+  // ---------- Model ----------
+  function computeYield(n) {
+    const lam = Math.LN2 / G.hl;
+    const x = lam * n;
+    const conv = x < 1e-9 ? 1 : (1 - Math.exp(-x)) / x;
+    const avg = G.lr + (G.cur - G.lr) * conv;         // expected average policy rate over n years, %
+    const tp10 = SC.tp.map(SC.tp.S);                  // 10-year term premium, bp
+    const tenorShape = (1 - Math.exp(-n / TAU_TP)) / (1 - Math.exp(-10 / TAU_TP));
+    const tp = tp10 * tenorShape;
+    const cr = SC.cr.map(SC.cr.S);
+    const fx = SC.fx.map(SC.fx.S);
+    const liq = SC.liq.map(SC.liq.S);
+    const avgBp = avg * 100;
+    const fair = avgBp + tp + cr + fx + liq;          // bp
+    const reoffer = fair + G.nic;                     // bp
+    const coupon = Math.round(reoffer / 100 * 8) / 8; // nearest 1/8 %
+    return { n, avgBp, tp, cr, fx, liq, fair, nic: G.nic, reoffer, coupon };
+  }
+
+  function renderOutput(y) {
+    $('h-coupon').textContent = f2(y.coupon, 3) + '%';
+    $('h-reoffer').textContent = f2(y.reoffer / 100, 3) + '%';
+    $('h-fair').textContent = f2(y.fair / 100, 3) + '%';
+    $('h-desc').textContent =
+      'Coupon for a ' + y.n + '-year local-currency sovereign bond issued at par. Reoffer yield = expected average policy rate + term premium + credit + currency + liquidity premia + new-issue concession. The coupon is the reoffer yield rounded to the nearest 1/8%.';
+
+    const rows = [
+      ['Expected average policy rate over tenor', y.avgBp, 'Policy path (Global inputs)'],
+      ['Term premium (tenor-shaped)',              y.tp,    'Block B: ' + f2(SC.tp.S, 1) + ' / 100'],
+      ['Sovereign credit spread',                  y.cr,    'Block A: ' + f2(SC.cr.S, 1) + ' / 100'],
+      ['Currency and convertibility premium',      y.fx,    'Block C: ' + f2(SC.fx.S, 1) + ' / 100'],
+      ['Liquidity and market-structure premium',   y.liq,   'Block D: ' + f2(SC.liq.S, 1) + ' / 100'],
+      ['New-issue concession',                     y.nic,   'Global input']
+    ];
+    const tb = $('breakdown');
+    tb.innerHTML = '';
+    rows.forEach(([name, bp, w]) => {
+      const share = (bp / y.reoffer) * 100;
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td>' + name + '</td>' +
+        '<td class="num">' + bp.toFixed(0) + '</td>' +
+        '<td class="num">' + share.toFixed(1) + '%</td>' +
+        '<td><div class="bar"><span style="width:' + Math.max(0, Math.min(100, share)) + '%"></span></div><div class="note">' + w + '</div></td>';
+      tb.append(tr);
+    });
+    const tot = document.createElement('tr');
+    tot.className = 'total';
+    tot.innerHTML = '<td>Reoffer yield</td><td class="num">' + y.reoffer.toFixed(0) + '</td><td class="num">100.0%</td><td></td>';
+    tb.append(tot);
+  }
+
+  function renderCurve() {
+    const tenors = [1, 2, 3, 5, 7, 10, 15, 20, 30];
+    const body = $('curve');
+    body.innerHTML = '';
+    tenors.forEach(n => {
+      const y = computeYield(n);
+      const tr = document.createElement('tr');
+      if (n === G.tenor) tr.style.background = '#eef4fa';
+      tr.innerHTML =
+        '<td>' + n + 'y</td>' +
+        '<td class="num">' + f2(y.fair / 100, 2) + '%</td>' +
+        '<td class="num">' + f2(y.reoffer / 100, 2) + '%</td>' +
+        '<td class="num"><strong>' + f2(y.coupon, 3) + '%</strong></td>';
+      body.append(tr);
+    });
+  }
+
+  function renderStage2(y) {
+    const spread = SC2.iss.map(SC2.iss.S);
+    const inic = parseFloat($('inic').value);
+    const issReoffer = y.fair + spread + inic;        // bp
+    const issCoupon = Math.round(issReoffer / 100 * 8) / 8;
+    $('inic-val').textContent = inic + ' bp';
+    $('s2-spread').textContent = spread.toFixed(0) + ' bp';
+    $('s2-sov').textContent = f2(y.fair / 100, 3) + '%';
+    $('s2-yield').textContent = f2(issReoffer / 100, 3) + '%';
+    $('s2-coupon').textContent = f2(issCoupon, 3) + '%';
+  }
+
+  // ---------- Update loop ----------
+  function update() {
+    scoreOf(SC.cr); scoreOf(SC.tp); scoreOf(SC.fx); scoreOf(SC.liq);
+
+    // Link the sovereign-linkage factor to the sovereign credit score
+    const auto = SC2.iss.factors.find(f => f.auto);
+    auto.s = SC.cr.S;
+    auto.refs.sSl.value = auto.s;
+    auto.refs.sOut.textContent = f2(auto.s, 0);
+    scoreOf(SC2.iss);
+
+    [SC.cr, SC.tp, SC.fx, SC.liq, SC2.iss].forEach(sc => {
+      sc.factors.forEach(f => {
+        f.refs.eff.textContent = (f.eff * 100).toFixed(1) + '%';
+        f.refs.pts.textContent = (f.eff * f.s).toFixed(1);
+      });
+      sc.resultEl.textContent = 'Block score: ' + f2(sc.S, 1) + ' / 100';
+    });
+
+    const y = computeYield(G.tenor);
+    renderOutput(y);
+    renderCurve();
+    renderStage2(y);
+  }
+
+  // ---------- Init ----------
+  buildGlobal();
+  const s1 = $('cards-s1');
+  [SC.cr, SC.tp, SC.fx, SC.liq].forEach(sc => buildCard(sc, s1));
+  buildCard(SC2.iss, $('cards-s2'));
+  $('inic').addEventListener('input', update);
+  update();
+</script>
+</body>
+</html>
